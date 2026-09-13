@@ -1,76 +1,239 @@
-"""
-rag.py — Retrieval module (Owner: Rameen)
-
-CONTRACT (do not change without telling the whole team):
-    retrieve_info(query: str) -> {
-        "chunks": [str, ...],       # relevant text chunks to feed the LLM
-        "sources": [(name, url), ...]  # e.g. [("MedlinePlus", "https://medlineplus.gov/druginformation.html")]
-    }
-
-CURRENT STATE: this is a working stub using fuzzy name-matching over the local CSV,
-so the rest of the team can build against real output shapes today.
-
-TODO (Rameen):
-    1. Replace `_fuzzy_lookup` with real chunking + embeddings + ChromaDB vector search.
-    2. Pull richer data from OpenFDA / DailyMed instead of relying only on medicines.csv.
-    3. Build the ChromaDB snapshot ONCE (offline) and load it here — never build live.
-"""
-
-import csv
 import os
+import re
 from difflib import get_close_matches
 
-CSV_PATH = os.path.join(os.path.dirname(__file__), "data", "medicines.csv")
+import pandas as pd
 
-SOURCES = [
-    ("MedlinePlus", "https://medlineplus.gov/druginformation.html"),
-    ("DailyMed / FDA", "https://www.dailymed.nlm.nih.gov/dailymed/"),
+
+# ---------------------------------------------------------
+# FIND CSV FILE
+# ---------------------------------------------------------
+
+BASE_DIR = os.path.dirname(
+    os.path.abspath(__file__)
+)
+
+CSV_PATH = os.path.join(
+    BASE_DIR,
+    "medicines.csv"
+)
+
+
+# ---------------------------------------------------------
+# CHECK CSV EXISTS
+# ---------------------------------------------------------
+
+if not os.path.exists(CSV_PATH):
+
+    raise FileNotFoundError(
+        "medicines.csv was not found. "
+        "Please upload medicines.csv to the same "
+        "GitHub repository as app.py."
+    )
+
+
+# ---------------------------------------------------------
+# LOAD CSV
+# ---------------------------------------------------------
+
+try:
+
+    df = pd.read_csv(
+        CSV_PATH
+    )
+
+except Exception as error:
+
+    raise RuntimeError(
+        f"Could not read medicines.csv: {error}"
+    )
+
+
+# ---------------------------------------------------------
+# CLEAN COLUMN NAMES
+# ---------------------------------------------------------
+
+df.columns = (
+    df.columns
+    .astype(str)
+    .str.strip()
+    .str.lower()
+)
+
+
+# ---------------------------------------------------------
+# REQUIRED COLUMNS
+# ---------------------------------------------------------
+
+REQUIRED_COLUMNS = [
+    "medicine_name",
+    "drug_type",
+    "main_use",
+    "common_forms",
+    "safety_note",
+    "source_reference",
 ]
 
 
-def _load_medicines():
-    with open(CSV_PATH, newline="", encoding="utf-8") as f:
-        return list(csv.DictReader(f))
+missing_columns = [
+    column
+    for column in REQUIRED_COLUMNS
+    if column not in df.columns
+]
 
 
-_MEDICINES = _load_medicines()
-_NAMES = [m["medicine_name"] for m in _MEDICINES]
+if missing_columns:
+
+    raise ValueError(
+        "The CSV is missing these required columns: "
+        + ", ".join(missing_columns)
+    )
 
 
-def _fuzzy_lookup(query: str):
-    """Very simple name match — placeholder for real vector search."""
-    matches = get_close_matches(query.lower(), [n.lower() for n in _NAMES], n=1, cutoff=0.4)
-    if not matches:
+# ---------------------------------------------------------
+# CLEAN DATA
+# ---------------------------------------------------------
+
+for column in REQUIRED_COLUMNS:
+
+    df[column] = (
+        df[column]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+    )
+
+
+# Convert dataframe into a list of dictionaries
+
+MEDICINES = df.to_dict(
+    orient="records"
+)
+
+
+# ---------------------------------------------------------
+# TEXT NORMALIZATION
+# ---------------------------------------------------------
+
+def normalize_text(text):
+
+    text = str(text).lower().strip()
+
+    # Replace common punctuation with spaces
+
+    text = re.sub(
+        r"[^a-z0-9\s-]",
+        "",
+        text
+    )
+
+    # Remove extra spaces
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        text
+    )
+
+    return text
+
+
+# ---------------------------------------------------------
+# MEDICINE SEARCH
+# ---------------------------------------------------------
+
+def retrieve_info(user_input):
+
+    if not user_input:
         return None
-    for m in _MEDICINES:
-        if m["medicine_name"].lower() == matches[0]:
-            return m
+
+    query = normalize_text(
+        user_input
+    )
+
+    if not query:
+        return None
+
+
+    # -----------------------------------------------------
+    # 1. EXACT MATCH
+    # -----------------------------------------------------
+
+    for medicine in MEDICINES:
+
+        medicine_name = normalize_text(
+            medicine["medicine_name"]
+        )
+
+        if query == medicine_name:
+
+            return medicine
+
+
+    # -----------------------------------------------------
+    # 2. PARTIAL MATCH
+    # -----------------------------------------------------
+
+    for medicine in MEDICINES:
+
+        medicine_name = normalize_text(
+            medicine["medicine_name"]
+        )
+
+        if (
+            query in medicine_name
+            or medicine_name in query
+        ):
+
+            return medicine
+
+
+    # -----------------------------------------------------
+    # 3. FUZZY MATCH
+    # -----------------------------------------------------
+
+    medicine_names = [
+        normalize_text(
+            medicine["medicine_name"]
+        )
+        for medicine in MEDICINES
+    ]
+
+
+    matches = get_close_matches(
+        query,
+        medicine_names,
+        n=1,
+        cutoff=0.60
+    )
+
+
+    if matches:
+
+        matched_name = matches[0]
+
+        for medicine in MEDICINES:
+
+            medicine_name = normalize_text(
+                medicine["medicine_name"]
+            )
+
+            if medicine_name == matched_name:
+
+                return medicine
+
+
+    # -----------------------------------------------------
+    # NO MATCH
+    # -----------------------------------------------------
+
     return None
 
 
-def retrieve_info(query: str) -> dict:
-    """
-    Main entry point. Given a free-text query (usually a medicine name,
-    sometimes a natural-language question), return grounded chunks + sources.
+# ---------------------------------------------------------
+# GET ALL MEDICINES
+# ---------------------------------------------------------
 
-    If nothing matches, return an empty chunks list — the LLM prompt
-    (see safety.py SYSTEM_PROMPT) is responsible for turning that into
-    a "Record Not Found" response. Do NOT invent a chunk here.
-    """
-    record = _fuzzy_lookup(query)
-    if record is None:
-        return {"chunks": [], "sources": []}
+def get_all_medicines():
 
-    chunk = (
-        f"{record['medicine_name']} is a {record['drug_type']}. "
-        f"Main use: {record['main_use']}. "
-        f"Common forms: {record['common_forms']}. "
-        f"Safety note: {record['safety_note']}"
-    )
-    return {"chunks": [chunk], "sources": SOURCES}
-
-
-if __name__ == "__main__":
-    # quick manual sanity check — run `python rag.py` to test
-    for test_query in ["Paracetamol", "ibuprofen", "Zorbaxamine"]:
-        print(test_query, "->", retrieve_info(test_query))
+    return MEDICINES
