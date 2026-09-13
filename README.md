@@ -25,4 +25,42 @@ Nerosa/
 ├── requirements.txt
 ├── README.md
 └── data/
-    └── medicines.csv
+    └── medicines.csv# 💊 MediSense AI
+
+## AI-Assisted Medicine Information Assistant
+
+MediSense AI is a simple AI-assisted educational medicine information tool developed as a hackathon MVP.
+
+The application allows users to enter a medicine name and receive clear, structured information about:
+
+- Medicine name
+- Drug type
+- Main use
+- Common forms
+- Important safety note
+- Source reference
+
+---
+
+## 🎯 Project Goal
+
+The goal of MediSense AI is to make basic medicine information easier to understand and access through a simple user-friendly interface.
+
+The project is designed for educational purposes and is not intended to replace professional medical advice.
+
+---
+
+## 🔄 How It Works
+
+```text
+User enters medicine name
+          ↓
+Medicine search & matching
+          ↓
+Reference dataset
+          ↓
+Medicine information retrieved
+          ↓
+Clear educational response
+          ↓
+Safety disclaimer
